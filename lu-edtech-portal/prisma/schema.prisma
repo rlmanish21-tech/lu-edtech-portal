@@ -1,0 +1,674 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ==================== CORE USER MODELS ====================
+
+enum UserRole {
+  ADMIN
+  FACULTY
+  STUDENT
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  password      String
+  name          String
+  phone         String?
+  image         String?
+  role          UserRole  @default(STUDENT)
+  status        UserStatus @default(ACTIVE)
+  emailVerified DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Relations
+  studentProfile StudentProfile?
+  facultyProfile FacultyProfile?
+  bookmarks      Bookmark[]
+  notifications  Notification[]
+  auditLogs      AuditLog[]
+
+  @@index([email])
+  @@index([role])
+  @@index([status])
+  @@map("users")
+}
+
+model StudentProfile {
+  id            String   @id @default(cuid())
+  userId        String   @unique
+  enrollmentNo  String?  @unique
+  universityId  String
+  collegeId     String?
+  courseId      String
+  semesterId    String
+  curriculumId  String
+  status        UserStatus @default(ACTIVE)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // Relations
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  university  University  @relation(fields: [universityId], references: [id])
+  college     College?    @relation(fields: [collegeId], references: [id])
+  course      Course      @relation(fields: [courseId], references: [id])
+  semester    Semester    @relation(fields: [semesterId], references: [id])
+  curriculum  Curriculum  @relation(fields: [curriculumId], references: [id])
+  enrollments BatchEnrollment[]
+
+  @@index([userId])
+  @@index([universityId])
+  @@index([courseId])
+  @@index([semesterId])
+  @@index([curriculumId])
+  @@map("student_profiles")
+}
+
+model FacultyProfile {
+  id              String   @id @default(cuid())
+  userId          String   @unique
+  designation     String
+  department      String?
+  specialization  String?
+  permissions     Json?    // { canUploadContent: boolean, canManageBatches: boolean, etc. }
+  status          UserStatus @default(ACTIVE)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // Relations
+  user         User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  assignments  FacultyAssignment[]
+  batches      Batch[]           @relation("BatchFaculty")
+
+  @@index([userId])
+  @@map("faculty_profiles")
+}
+
+// ==================== ACADEMIC HIERARCHY ====================
+
+model University {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  slug      String   @unique
+  location  String?
+  status    String   @default("active") // active, inactive
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  colleges    College[]
+  courses     Course[]
+  calendars   AcademicCalendar[]
+  notices     UniversityNotice[]
+  students    StudentProfile[]
+
+  @@map("universities")
+}
+
+model College {
+  id           String   @id @default(cuid())
+  name         String
+  universityId String
+  type         String   @default("department") // department, college, institute
+  status       String   @default("active")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Relations
+  university University       @relation(fields: [universityId], references: [id], onDelete: Cascade)
+  students   StudentProfile[]
+
+  @@unique([universityId, name])
+  @@index([universityId])
+  @@map("colleges")
+}
+
+model Course {
+  id           String   @id @default(cuid())
+  name         String
+  universityId String
+  code         String?
+  duration     Int?     // in years
+  status       String   @default("active")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Relations
+  university   University       @relation(fields: [universityId], references: [id], onDelete: Cascade)
+  curriculums  Curriculum[]
+  students     StudentProfile[]
+  batches      Batch[]
+  timetables   UniversityTimetable[]
+  examSchedules ExamSchedule[]
+
+  @@unique([universityId, name])
+  @@index([universityId])
+  @@map("courses")
+}
+
+model Curriculum {
+  id          String   @id @default(cuid())
+  name        String   // e.g., "2026-27"
+  courseId    String
+  sessionYear String   // e.g., "2026-27"
+  status      String   @default("active")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  course    Course           @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  semesters Semester[]
+  students  StudentProfile[]
+  batches   Batch[]
+
+  @@unique([courseId, sessionYear])
+  @@index([courseId])
+  @@map("curriculums")
+}
+
+model Semester {
+  id          String   @id @default(cuid())
+  name        String   // e.g., "Semester V"
+  number      Int      // 1, 2, 3, 4, 5, 6
+  curriculumId String
+  status      String   @default("active")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  curriculum    Curriculum       @relation(fields: [curriculumId], references: [id], onDelete: Cascade)
+  subjects      Subject[]
+  students      StudentProfile[]
+  batches       Batch[]
+  timetables    UniversityTimetable[]
+  examSchedules ExamSchedule[]
+
+  @@unique([curriculumId, number])
+  @@index([curriculumId])
+  @@map("semesters")
+}
+
+model Subject {
+  id          String   @id @default(cuid())
+  name        String
+  semesterId  String
+  code        String?
+  credits     Int?
+  status      String   @default("active")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  semester      Semester        @relation(fields: [semesterId], references: [id], onDelete: Cascade)
+  units         Unit[]
+  resources     Resource[]
+  pyqPapers     PYQPaper[]
+  pyqQuestions  PYQQuestion[]
+  facultyAssignments FacultyAssignment[]
+
+  @@unique([semesterId, name])
+  @@index([semesterId])
+  @@map("subjects")
+}
+
+model Unit {
+  id          String   @id @default(cuid())
+  name        String
+  number      Int
+  subjectId   String
+  description String?
+  status      String   @default("active")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  subject      Subject       @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  topics       Topic[]
+  resources    Resource[]
+  pyqQuestions PYQQuestion[]
+
+  @@unique([subjectId, number])
+  @@index([subjectId])
+  @@map("units")
+}
+
+model Topic {
+  id          String   @id @default(cuid())
+  name        String
+  unitId      String
+  description String?
+  status      String   @default("active")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  unit         Unit          @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  resources    Resource[]
+  pyqQuestions PYQQuestion[]
+
+  @@unique([unitId, name])
+  @@index([unitId])
+  @@map("topics")
+}
+
+// ==================== BATCH SYSTEM ====================
+
+enum BatchStatus {
+  ACTIVE
+  INACTIVE
+  ARCHIVED
+}
+
+model Batch {
+  id            String     @id @default(cuid())
+  name          String
+  code          String     @unique
+  universityId  String
+  courseId      String
+  semesterId    String
+  curriculumId  String
+  facultyId     String?
+  description   String?
+  externalUrl   String?    // External learning platform URL
+  startDate     DateTime?
+  endDate       DateTime?
+  status        BatchStatus @default(ACTIVE)
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  // Relations
+  course      Course            @relation(fields: [courseId], references: [id])
+  semester    Semester          @relation(fields: [semesterId], references: [id])
+  curriculum  Curriculum        @relation(fields: [curriculumId], references: [id])
+  faculty     FacultyProfile?   @relation("BatchFaculty", fields: [facultyId], references: [id])
+  enrollments BatchEnrollment[]
+  assignments FacultyAssignment[]
+  resources   ResourceAccess[]
+  announcements Announcement[]
+
+  @@index([courseId])
+  @@index([semesterId])
+  @@index([status])
+  @@map("batches")
+}
+
+model BatchEnrollment {
+  id         String   @id @default(cuid())
+  studentId  String
+  batchId    String
+  status     String   @default("active") // active, completed, dropped
+  enrolledAt DateTime @default(now())
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  // Relations
+  student StudentProfile @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  batch   Batch          @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  @@unique([studentId, batchId])
+  @@index([studentId])
+  @@index([batchId])
+  @@map("batch_enrollments")
+}
+
+model FacultyAssignment {
+  id        String @id @default(cuid())
+  facultyId String
+  batchId   String
+  subjectId String?
+  role      String @default("instructor") // instructor, coordinator
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  faculty FacultyProfile @relation(fields: [facultyId], references: [id], onDelete: Cascade)
+  batch   Batch          @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  subject Subject?       @relation(fields: [subjectId], references: [id])
+
+  @@unique([facultyId, batchId, subjectId])
+  @@index([facultyId])
+  @@index([batchId])
+  @@map("faculty_assignments")
+}
+
+// ==================== CONTENT / RESOURCES ====================
+
+enum ResourceType {
+  DETAILED_NOTES
+  SHORT_NOTES
+  PDF
+  PPT
+  VIDEO
+  REVISION_NOTES
+  IMPORTANT_QUESTIONS
+  OTHER
+}
+
+enum AccessLevel {
+  PUBLIC
+  LOGGED_IN
+  SPECIFIC_BATCH
+  MULTIPLE_BATCHES
+  PREMIUM
+}
+
+enum ResourceStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+model Resource {
+  id          String         @id @default(cuid())
+  title       String
+  description String?
+  type        ResourceType
+  fileUrl     String?        // URL to stored file
+  externalUrl String?        // External video/link
+  fileSize    Int?
+  fileType    String?
+  allowDownload Boolean      @default(true)
+  accessLevel AccessLevel    @default(LOGGED_IN)
+  status      ResourceStatus @default(DRAFT)
+  topicId     String?
+  subjectId   String?
+  unitId      String?
+  uploadedBy  String         // userId
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  // Relations
+  topic       Topic?          @relation(fields: [topicId], references: [id])
+  subject     Subject?        @relation(fields: [subjectId], references: [id])
+  unit        Unit?           @relation(fields: [unitId], references: [id])
+  accesses    ResourceAccess[]
+  bookmarks   Bookmark[]
+
+  @@index([topicId])
+  @@index([subjectId])
+  @@index([unitId])
+  @@index([type])
+  @@index([status])
+  @@index([accessLevel])
+  @@map("resources")
+}
+
+model ResourceAccess {
+  id         String @id @default(cuid())
+  resourceId String
+  batchId    String
+  createdAt  DateTime @default(now())
+
+  // Relations
+  resource Resource @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+  batch    Batch    @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  @@unique([resourceId, batchId])
+  @@index([resourceId])
+  @@index([batchId])
+  @@map("resource_accesses")
+}
+
+// ==================== PYQ SYSTEM ====================
+
+enum ExamType {
+  END_SEMESTER
+  MID_SEMESTER
+  QUIZ
+  SUPPLEMENTARY
+}
+
+model PYQPaper {
+  id        String   @id @default(cuid())
+  subjectId String
+  year      Int
+  examType  ExamType @default(END_SEMESTER)
+  pdfUrl    String
+  status    String   @default("published")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  subject Subject @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+
+  @@index([subjectId])
+  @@index([year])
+  @@map("pyq_papers")
+}
+
+model PYQQuestion {
+  id        String   @id @default(cuid())
+  subjectId String
+  unitId    String?
+  topicId   String?
+  year      Int
+  question  String
+  marks     Int?
+  answer    String?
+  status    String   @default("published")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  subject Subject @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  unit    Unit?   @relation(fields: [unitId], references: [id])
+  topic   Topic?  @relation(fields: [topicId], references: [id])
+
+  @@index([subjectId])
+  @@index([unitId])
+  @@index([year])
+  @@map("pyq_questions")
+}
+
+// ==================== UNIVERSITY INFORMATION ====================
+
+model UniversityTimetable {
+  id         String   @id @default(cuid())
+  courseId   String
+  semesterId String
+  day        String   // Monday, Tuesday, etc.
+  startTime  String   // "09:00"
+  endTime    String   // "10:30"
+  subject    String
+  room       String?
+  additionalInfo String?
+  status     String   @default("active")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  // Relations
+  course   Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  semester Semester @relation(fields: [semesterId], references: [id], onDelete: Cascade)
+
+  @@index([courseId])
+  @@index([semesterId])
+  @@index([day])
+  @@map("university_timetables")
+}
+
+model ExamSchedule {
+  id         String   @id @default(cuid())
+  courseId   String
+  semesterId String
+  subject    String
+  examDate   DateTime
+  examTime   String?
+  venue      String?
+  examType   String   @default("end_semester")
+  status     String   @default("active")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  // Relations
+  course   Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  semester Semester @relation(fields: [semesterId], references: [id], onDelete: Cascade)
+
+  @@index([courseId])
+  @@index([semesterId])
+  @@index([examDate])
+  @@map("exam_schedules")
+}
+
+model AcademicCalendar {
+  id          String   @id @default(cuid())
+  universityId String
+  title       String
+  type        String   // holiday, event, exam, registration
+  eventDate   DateTime
+  description String?
+  pdfUrl      String?
+  status      String   @default("active")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  university University @relation(fields: [universityId], references: [id], onDelete: Cascade)
+
+  @@index([universityId])
+  @@index([eventDate])
+  @@map("academic_calendars")
+}
+
+model UniversityNotice {
+  id          String   @id @default(cuid())
+  universityId String
+  title       String
+  content     String
+  category    String   @default("general") // general, exam, admission, result
+  pdfUrl      String?
+  priority    String   @default("normal") // low, normal, high, urgent
+  status      String   @default("published")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  university University @relation(fields: [universityId], references: [id], onDelete: Cascade)
+
+  @@index([universityId])
+  @@index([category])
+  @@index([priority])
+  @@map("university_notices")
+}
+
+// ==================== ANNOUNCEMENTS & NOTIFICATIONS ====================
+
+enum AnnouncementTarget {
+  EVERYONE
+  COURSE
+  SEMESTER
+  BATCH
+}
+
+model Announcement {
+  id        String             @id @default(cuid())
+  title     String
+  content   String
+  target    AnnouncementTarget @default(EVERYONE)
+  courseId  String?
+  semesterId String?
+  batchId   String?
+  createdBy String
+  status    String             @default("published")
+  createdAt DateTime           @default(now())
+  updatedAt DateTime           @updatedAt
+
+  // Relations
+  batch Batch? @relation(fields: [batchId], references: [id])
+
+  @@index([target])
+  @@index([batchId])
+  @@index([status])
+  @@map("announcements")
+}
+
+enum NotificationType {
+  NEW_NOTE
+  NEW_PYQ
+  NEW_ANNOUNCEMENT
+  BATCH_UPDATE
+  TIMETABLE_UPDATE
+  EXAM_SCHEDULE
+  NEW_NOTICE
+}
+
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String
+  type      NotificationType
+  title     String
+  message   String
+  link      String?
+  isRead    Boolean          @default(false)
+  createdAt DateTime         @default(now())
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([isRead])
+  @@map("notifications")
+}
+
+// ==================== BOOKMARKS ====================
+
+enum BookmarkType {
+  RESOURCE
+  TOPIC
+  PYQ
+  IMPORTANT_QUESTION
+}
+
+model Bookmark {
+  id         String       @id @default(cuid())
+  userId     String
+  resourceId String?
+  topicId    String?
+  pyqId      String?
+  type       BookmarkType
+  createdAt  DateTime     @default(now())
+
+  // Relations
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  resource Resource? @relation(fields: [resourceId], references: [id])
+
+  @@unique([userId, resourceId, topicId, pyqId])
+  @@index([userId])
+  @@map("bookmarks")
+}
+
+// ==================== AUDIT LOG ====================
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  action    String   // CREATE, UPDATE, DELETE, LOGIN, etc.
+  entity    String   // table name
+  entityId  String?
+  oldData   Json?
+  newData   Json?
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  // Relations
+  user User? @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([action])
+  @@index([entity])
+  @@map("audit_logs")
+}
